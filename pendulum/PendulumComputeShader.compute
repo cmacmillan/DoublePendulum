@@ -1,0 +1,88 @@
+﻿// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel CSMain
+#pragma kernel Fade
+
+// Create a RenderTexture with enableRandomWrite flag and set it
+// with cs.SetTexture
+RWTexture2D<float4> Result;
+
+//x is theta, y is delta theta
+RWStructuredBuffer<float4> ping;
+RWStructuredBuffer<float4> pong;
+
+int resolution;
+float L1;
+float L2;
+float m1;
+float m2;
+float g;
+float deltaTime;
+
+float fadeAmount;
+
+float brightness;
+
+float GetTheta1Accel(float theta1,float theta2, float theta1Vel, float theta2Vel)
+{
+	float num = (-g * (2 * m1 + m2) * sin(theta1)) -
+		(m2 * g * sin(theta1 - 2 * theta2)) -
+		(2 * sin(theta1 - theta2) * m2 * (theta2Vel * theta2Vel * L2 + theta1Vel * theta1Vel * L1 * cos(theta1 - theta2)));
+	float denom = L1 * (2 * m1 + m2 - m2 * cos(2 * theta1 - 2 * theta2));
+	return num / denom;
+}
+float GetTheta2Accel(float theta1,float theta2, float theta1Vel, float theta2Vel)
+{
+	float num = (2 * sin(theta1 - theta2) * (theta1Vel * theta1Vel * L1 * (m1 + m2) + g * (m1 + m2) * cos(theta1) + theta2Vel * theta2Vel * L2 * m2 * cos(theta1 - theta2)));
+	float denom = L2 * (2 * m1 + m2 - m2 * cos(2 * theta1 - 2 * theta2));
+	return num / denom;
+}
+
+void DrawLine(int2 start, int2 end)
+{
+	float deltaX = end.x - start.x;
+	float deltaY = end.y - start.y;
+	float deltaErr = abs(deltaY / deltaX);
+	float error = 0.0;
+	int y = start.y;
+	int signDelta = sign(deltaX);
+	int ender = end.x + signDelta;
+	for (int x = start.x; x != ender; x+=signDelta)
+	{
+		if (x >= 0 && x < resolution && y >= 0 && y < resolution) {
+			Result[int2(x, y)] += brightness;
+		}
+		error = error + deltaErr;
+		if (error > .5) {
+			y = y + sign(deltaY);
+			error = error - 1.0;
+		}
+	}
+}
+
+[numthreads(8,8,1)]
+void Fade(uint3 id : SV_DispatchThreadID) 
+{
+    float4 initialColor = Result[id.xy];
+    float4 endColor =initialColor - fadeAmount.xxxx;
+    endColor = saturate(endColor);
+	Result[id.xy] = endColor;
+}
+
+[numthreads(32,1,1)]
+void CSMain(uint3 id : SV_DispatchThreadID)
+{
+	float4 input = ping[id.x];
+	float theta1 = input.x;
+	float theta1Vel = input.y;
+	float theta2 = input.z;
+	float theta2Vel = input.w;
+	float4 output = float4(0, 0, 0, 0);
+	output.x = theta1 + theta1Vel * deltaTime;
+	output.y = theta1Vel + deltaTime*GetTheta1Accel(theta1,theta2,theta1Vel,theta2Vel);
+	output.z = theta2 + theta2Vel * deltaTime;
+	output.w = theta2Vel + deltaTime*GetTheta2Accel(theta1,theta2,theta1Vel,theta2Vel);
+	pong[id.x] = output;
+	float2 firstPoint = resolution / 2 + L1 * float2(sin(output.x), cos(output.x));
+	float2 secondPoint = firstPoint+ L2*float2(sin(output.z), cos(output.z));
+	DrawLine(firstPoint,secondPoint);
+}

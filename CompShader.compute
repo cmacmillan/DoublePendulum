@@ -1,0 +1,54 @@
+﻿// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel CSMain
+#pragma kernel Fade
+
+// Create a RenderTexture with enableRandomWrite flag and set it
+// with cs.SetTexture
+RWTexture2D<float4> Result;
+
+//xy is xy position zw is xy velocity
+RWStructuredBuffer<float4> ping;
+RWStructuredBuffer<float4> pong;
+
+float timestep;
+int objCount;
+float g;
+float zoom;
+float2 mid;
+float forcemax;
+
+float fadeAmount;
+
+void Draw(float2 coord,float4 color) {
+
+    Result[mid+(coord/zoom)] = color;
+}
+
+[numthreads(32,1,1)]
+void CSMain(uint3 id : SV_DispatchThreadID)
+{
+    float2 position = ping[id.x].xy;
+    float2 vel = ping[id.x].zw;
+    float2 force = 0;
+    //assume all particles have same mass
+    for (int i = 0; i < objCount; i++)
+    {
+        if ((uint)i == id.x)
+            continue;
+        float2 offset = ping[i].xy - position;
+        float mag = (g / dot(offset, offset));
+        force += min(abs(mag), forcemax)*normalize(offset);
+    }
+    pong[id.x].zw = vel + force;
+    pong[id.x].xy = position + vel * timestep;
+    Draw(pong[id.x].xy,float4(1,1,1,1));
+}
+
+[numthreads(8,8,1)]
+void Fade(uint3 id : SV_DispatchThreadID) 
+{
+    float4 initialColor = Result[id.xy];
+    float4 endColor =initialColor - fadeAmount.xxxx;
+    endColor = saturate(endColor);
+    Result[id.xy] = endColor;
+}
