@@ -1,10 +1,12 @@
 ﻿// Each #kernel tells which function to compile; you can have many kernels
 #pragma kernel CSMain
 #pragma kernel Fade
+#pragma kernel Render
 
 // Create a RenderTexture with enableRandomWrite flag and set it
 // with cs.SetTexture
-RWTexture2D<float4> Result;
+RWTexture2D<float4> ResultTexture;
+RWStructuredBuffer<int> Result;
 
 //x is theta, y is delta theta
 RWStructuredBuffer<float4> ping;
@@ -17,10 +19,11 @@ float m1;
 float m2;
 float g;
 float deltaTime;
+int objectCount;
 
 float fadeAmount;
 
-float brightness;
+//float brightness;
 
 float GetTheta1Accel(float theta1,float theta2, float theta1Vel, float theta2Vel)
 {
@@ -37,40 +40,85 @@ float GetTheta2Accel(float theta1,float theta2, float theta1Vel, float theta2Vel
 	return num / denom;
 }
 
-void DrawLine(int2 start, int2 end)
+void DrawLine(int2 start, int2 end, int color)
 {
 	float deltaX = end.x - start.x;
 	float deltaY = end.y - start.y;
-	float deltaErr = abs(deltaY / deltaX);
-	float error = 0.0;
-	int y = start.y;
-	int signDelta = sign(deltaX);
-	int ender = end.x + signDelta;
-	for (int x = start.x; x != ender; x+=signDelta)
+	if (abs(deltaX) < abs(deltaY)) 
 	{
-		if (x >= 0 && x < resolution && y >= 0 && y < resolution) {
-			Result[int2(x, y)] += brightness;
-		}
-		error = error + deltaErr;
-		if (error > .5) {
-			y = y + sign(deltaY);
-			error = error - 1.0;
+		float deltaErr = abs(deltaX / deltaY);
+		float error = 0.0;
+		int x = start.x;
+		int signDelta = sign(deltaY);
+		int ender = end.y + signDelta;
+		for (int y = start.y; y != ender; y += signDelta)
+		{
+			if (x >= 0 && x < resolution && y >= 0 && y < resolution) {
+				//Result[(int)x + ((int)y) * resolution] += color;
+				InterlockedMax(Result[(int)x+((int)y)*resolution], color);
+			}
+			error = error + deltaErr;
+			if (error > .5) {
+				x = x + sign(deltaX);
+				error = error - 1.0;
+			}
 		}
 	}
+	else 
+	{
+		float deltaErr = abs(deltaY / deltaX);
+		float error = 0.0;
+		int y = start.y;
+		int signDelta = sign(deltaX);
+		int ender = end.x + signDelta;
+		for (int x = start.x; x != ender; x += signDelta)
+		{
+			if (x >= 0 && x < resolution && y >= 0 && y < resolution) {
+				//Result[(int)x + ((int)y) * resolution] += color;
+				InterlockedMax(Result[(int)x+((int)y)*resolution], color);
+			}
+			error = error + deltaErr;
+			if (error > .5) {
+				y = y + sign(deltaY);
+				error = error - 1.0;
+			}
+		}
+	}
+}
+
+  float3 HUEtoRGB(float H)
+  {
+    float R = abs(H * 6 - 3) - 1;
+    float G = 2 - abs(H * 6 - 2);
+    float B = 2 - abs(H * 6 - 4);
+    return saturate(float3(R,G,B));
+  }
+
+[numthreads(8,8,1)]
+void Render(uint3 id : SV_DispatchThreadID)
+{
+	int val = Result[id.x + (id.y) * resolution];
+	if (val != 0)
+		ResultTexture[id.xy] = float4(HUEtoRGB((val/ (float)objectCount)-.35f), 1);
+	//ResultTexture[id.xy] = float4(0, 1, 0, 1);
 }
 
 [numthreads(8,8,1)]
 void Fade(uint3 id : SV_DispatchThreadID) 
 {
-    float4 initialColor = Result[id.xy];
-    float4 endColor =initialColor - fadeAmount.xxxx;
-    endColor = saturate(endColor);
-	Result[id.xy] = endColor;
+	Result[id.x + (id.y) * resolution] = 0;
+	ResultTexture[id.xy] = 0;
+	//float4 initialColor = Result[id.xy];
+    //float4 endColor =initialColor - fadeAmount.xxxx;
+    //endColor = saturate(endColor);
+	//Result[id.xy] = endColor;
 }
 
 [numthreads(32,1,1)]
 void CSMain(uint3 id : SV_DispatchThreadID)
 {
+	if (id.x >= objectCount)
+		return;
 	float4 input = ping[id.x];
 	float theta1 = input.x;
 	float theta1Vel = input.y;
@@ -82,7 +130,9 @@ void CSMain(uint3 id : SV_DispatchThreadID)
 	output.z = theta2 + theta2Vel * deltaTime;
 	output.w = theta2Vel + deltaTime*GetTheta2Accel(theta1,theta2,theta1Vel,theta2Vel);
 	pong[id.x] = output;
+	float2 centerPoint = float2(resolution / 2, resolution / 2);
 	float2 firstPoint = resolution / 2 + L1 * float2(sin(output.x), cos(output.x));
 	float2 secondPoint = firstPoint+ L2*float2(sin(output.z), cos(output.z));
-	DrawLine(firstPoint,secondPoint);
+	DrawLine(centerPoint,firstPoint,id.x);
+	DrawLine(firstPoint,secondPoint,id.x);
 }

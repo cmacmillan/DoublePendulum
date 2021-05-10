@@ -5,12 +5,17 @@ using UnityEngine;
 public class PendulumComputeMono : MonoBehaviour
 {
     private RenderTexture rt;
+    private ComputeBuffer rtCompBuffer;
     private int kernelIndex = -1;
     private int fadeKernelIndex = -1;
+    private int renderKernelIndex = -1;
     private ComputeBuffer readBuffer;
     private ComputeBuffer writeBuffer;
     public ComputeShader s;
     public Material mat;
+
+    public Vector2 initialConditions;
+    private Vector2 oldInitialConditions;
 
     public int resolution;
     private int oldResolution;
@@ -33,6 +38,7 @@ public class PendulumComputeMono : MonoBehaviour
     {
         readBuffer.Release();
         writeBuffer.Release();
+        rtCompBuffer.Release();
         rt.Release();
     }
 
@@ -46,6 +52,7 @@ public class PendulumComputeMono : MonoBehaviour
 
     void Update()
     {
+        objectCount = Mathf.Max(objectCount, 1);
         if (kernelIndex == -1)
         {
             kernelIndex = s.FindKernel("CSMain");
@@ -54,23 +61,35 @@ public class PendulumComputeMono : MonoBehaviour
         {
             fadeKernelIndex = s.FindKernel("Fade");
         }
+        if (renderKernelIndex == -1)
+        {
+            renderKernelIndex = s.FindKernel("Render");
+        }
 
         if (resolution != oldResolution)
         {
             oldResolution = resolution;
+            if (rtCompBuffer != null)
+                rtCompBuffer.Release();
             if (rt != null)
                 rt.Release();
             rt = new RenderTexture(resolution, resolution, 0, RenderTextureFormat.ARGBFloat);
             rt.enableRandomWrite = true;
             rt.useMipMap = false;
             rt.Create();
-            s.SetTexture(kernelIndex, "Result", rt);
-            s.SetTexture(fadeKernelIndex, "Result", rt);
+            rtCompBuffer = new ComputeBuffer(resolution * resolution, 4); 
+            s.SetBuffer(kernelIndex, "Result", rtCompBuffer);
+            s.SetBuffer(fadeKernelIndex, "Result", rtCompBuffer);
+            s.SetBuffer(renderKernelIndex, "Result", rtCompBuffer);
+            s.SetTexture(renderKernelIndex, "ResultTexture", rt);
+            s.SetTexture(fadeKernelIndex, "ResultTexture", rt);
+            //s.SetTexture(fadeKernelIndex, "Result", rt);
             mat.SetTexture("_MainTex", rt);
         }
 
-        if (objectCount != oldObjectCount)
+        if (objectCount != oldObjectCount || oldInitialConditions!= initialConditions)
         {
+            oldInitialConditions = initialConditions;
             oldObjectCount = objectCount;
             if (readBuffer != null)
                 readBuffer.Release();
@@ -78,9 +97,13 @@ public class PendulumComputeMono : MonoBehaviour
                 writeBuffer.Release();
             readBuffer = new ComputeBuffer(objectCount, 16);
             List<Vector4> initialValues = new List<Vector4>();
+            //Vector4 rand = new Vector4(Random.value * Mathf.PI * 2, 0, Random.value * Mathf.PI * 2, 0);
+            Vector4 rand = new Vector4(initialConditions.x, 0, initialConditions.y, 0);
             for (int i = 0; i < objectCount; i++)
             {
-                initialValues.Add(new Vector4(Random.value*Mathf.PI*2,0,Random.value*Mathf.PI*2,0));
+                Vector4 v = rand;
+                v.z += i / 10000000.0f;
+                initialValues.Add(v);
             }
             readBuffer.SetData(initialValues);
             writeBuffer = new ComputeBuffer(objectCount, 16);
@@ -90,6 +113,7 @@ public class PendulumComputeMono : MonoBehaviour
 
         s.SetBuffer(kernelIndex, "ping", readBuffer);
         s.SetBuffer(kernelIndex,"pong", writeBuffer);
+        s.SetInt("objectCount", objectCount);
         s.SetInt("resolution", resolution);
         s.SetFloat("brightness", brightness);
         s.SetFloat("L1", L1);
@@ -101,6 +125,7 @@ public class PendulumComputeMono : MonoBehaviour
         var swap = readBuffer;
         readBuffer = writeBuffer;
         writeBuffer = swap;
-        s.Dispatch(kernelIndex, objectCount, 1, 1);
+        s.Dispatch(kernelIndex, Mathf.CeilToInt(objectCount/32.0f), 1, 1);
+        s.Dispatch(renderKernelIndex, resolution / 8, resolution / 8, 1);
     }
 }
